@@ -502,12 +502,8 @@ function confirmer(message, oui = 'Confirmer'){
 
 function vueApropos(){
   const cta = () => el('button',{class:'btn primaire',onclick:()=>vers('sommaire'),text:'Commencer le QCM →'});
-  const p = lireProfil();
   return el('section',{class:'carte apropos'},
     el('h2',{text:'À propos du QCM'}),
-    el('div',{class:'profil-carte'},
-      el('span',{text: p ? `👤 ${nomComplet(p)}${p.fonction ? ' · ' + p.fonction : ''}` : '👤 Candidat : non renseigné (facultatif)'}),
-      el('button',{class:'btn',onclick:()=>profilModal(),text: p ? 'Modifier mon profil' : 'Renseigner mon profil'})),
     INTRO.map(s => el('div',{}, el('h3',{text:s.t}), s.b.map(bloc))),
     el('div',{class:'rangee',style:'margin-top:24px'}, cta()));
 }
