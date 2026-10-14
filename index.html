@@ -351,7 +351,6 @@ body{line-height:1.65;letter-spacing:.005em}
 .option.mauvaise .lettre{background:var(--ko);border-color:var(--ko);color:#fff}
 .option:has(input:focus-visible){outline:3px solid var(--orange);outline-offset:2px}
 .nav-train{border-top:1px solid var(--trait);padding-top:20px}
-.nav-train .btn-verifier{width:100%;min-height:48px;margin-bottom:12px}
 .nav-train .nav-exam{margin-top:0}
 @media (max-width:720px){.parcours-grille,.lignes-themes{grid-template-columns:1fr}.parcours{padding:18px}}
 @media (max-width:720px){.faits{grid-template-columns:1fr 1fr}.faits .tuile b{font-size:1.1rem}.faits .tuile:last-child:nth-child(odd){grid-column:1/-1}}
@@ -459,14 +458,10 @@ body.avec-panneau .entete{max-width:1200px}
 .fb-corps{padding:14px 16px}
 .fb-titre{font-size:1rem}
 .nav-train{border-top:0;padding-top:4px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
-.nav-train .btn-verifier{width:auto;min-height:0;margin:0;padding:9px 22px}
-.nav-train .btn-verifier:disabled{background:#8A8F98;border-color:#8A8F98;opacity:1;color:#fff}
-.nav-train .nav-exam{margin-left:auto}
+.nav-train .nav-exam{margin-left:0;width:100%;margin-top:0}
 .nav-exam{margin-top:14px;gap:10px}
 .nav-exam .btn{min-height:0;padding:9px 18px}
-.nav-train .nav-exam .btn{flex:none}
 .carte-q .nav-exam .btn{flex:1}
-.carte-q .nav-train .nav-exam .btn{flex:none}
 .btn{padding:9px 18px}
 .btn-revue{min-height:0;padding:9px 14px}
 .revue-sep{margin-top:14px}
@@ -474,7 +469,6 @@ body.avec-panneau .entete{max-width:1200px}
   .carte-q{padding:0}
   .q-corps{padding:14px 14px 16px}
   .nav-train{flex-direction:column;align-items:stretch}
-  .nav-train .btn-verifier{width:100%}
   .nav-train .nav-exam{margin-left:0}
   .nav-train .nav-exam .btn{flex:1}
   .onglet-q{min-width:46%}
@@ -907,26 +901,30 @@ function vueQuestion(){
 
   const L = ordreNav(), p = Math.max(0, L.indexOf(i)), prev = voisin(i,-1), next = voisin(i,1), dernier = next===null;
   const btnPrec = el('button',{class:'btn',disabled:prev===null?'':false,'aria-label':'Question précédente',title:'Précédente (←)',onclick:()=>aller('question',prev),text:'← Précédente'});
-  const btnSuiv = dernier
-    ? el('button',{class:'btn'+(verifiee?' primaire':''),onclick:()=>aller('resume'),text:'Terminer'})
-    : el('button',{class:'btn'+(verifiee?' primaire':''),'aria-label':'Question suivante',title:'Suivante (→)',onclick:()=>aller('question',next),text:'Suivante →'});
-  const btnVerifier = el('button',{class:'btn primaire btn-verifier',disabled:(!choix||verifiee)?'':false,text:'Vérifier la réponse',
-    onclick:()=>{
-      if(!choix || etat.verif[i]) return;
-      etat.verif[i] = true; srMaj(i, choix===q.a); sauver(); majEntete(); majSession();
-      fb.firstChild.replaceChildren(blocFeedback(i));
-      /* Mise en couleur des options sans reconstruire la page, pour garder l'animation */
-      champ.querySelectorAll('.option').forEach(l=>{
-        const v = l.querySelector('input').value;
-        l.classList.remove('choisie'); l.classList.add('verrou');
-        l.querySelector('input').disabled = true;
-        if(v===q.a){ l.classList.add('bonne'); l.append(el('span',{class:'badge',text:'Bonne réponse'})); }
-        else if(v===choix){ l.classList.add('mauvaise'); l.append(el('span',{class:'badge',text:'Votre réponse'})); }
-      });
-      btnVerifier.disabled = true; btnSuiv.classList.add('primaire');
-      requestAnimationFrame(()=>requestAnimationFrame(()=>fb.classList.add('ouvert')));
-      setTimeout(()=>fb.scrollIntoView({behavior:'smooth',block:'nearest'}),150);
-    }});
+  /* Le bouton unique valide d'abord la réponse sélectionnée (correction affichée), puis un second clic passe à la suite.
+     Sans sélection, il navigue simplement. */
+  const verifier = () => {
+    etat.verif[i] = true; srMaj(i, choix===q.a); sauver(); majEntete(); majSession();
+    fb.firstChild.replaceChildren(blocFeedback(i));
+    /* Mise en couleur des options sans reconstruire la page, pour garder l'animation */
+    champ.querySelectorAll('.option').forEach(l=>{
+      const v = l.querySelector('input').value;
+      l.classList.remove('choisie'); l.classList.add('verrou');
+      l.querySelector('input').disabled = true;
+      if(v===q.a){ l.classList.add('bonne'); l.append(el('span',{class:'badge',text:'Bonne réponse'})); }
+      else if(v===choix){ l.classList.add('mauvaise'); l.append(el('span',{class:'badge',text:'Votre réponse'})); }
+    });
+    btnSuiv.classList.add('primaire'); btnSuiv.textContent = libSuiv; btnSuiv.title = dernier ? 'Terminer' : 'Suivante (→)'; btnSuiv.setAttribute('aria-label', dernier ? 'Terminer' : 'Question suivante');
+    requestAnimationFrame(()=>requestAnimationFrame(()=>fb.classList.add('ouvert')));
+    setTimeout(()=>fb.scrollIntoView({behavior:'smooth',block:'nearest'}),150);
+  };
+  const avancer = dest => () => { if(choix && !etat.verif[i]) verifier(); else dest(); };
+  /* Un seul bouton : « Vérifier la réponse » tant qu'une option sélectionnée n'est pas validée, puis « Suivante » */
+  const libSuiv = dernier ? 'Terminer' : 'Suivante →', aVerifier = !!choix && !verifiee;
+  const btnSuiv = el('button',{class:'btn btn-suivant'+((verifiee||choix)?' primaire':''),
+    'aria-label': aVerifier ? 'Vérifier la réponse' : (dernier ? 'Terminer' : 'Question suivante'),
+    title: aVerifier ? 'Vérifier la réponse (→ ou Entrée)' : (dernier ? 'Terminer' : 'Suivante (→)'),
+    onclick:avancer(()=> dernier ? aller('resume') : aller('question',next)), text: aVerifier ? 'Vérifier la réponse' : libSuiv});
 
   return el('div',{class:'vue-q'},
     barreFiltres(),
@@ -942,7 +940,7 @@ function vueQuestion(){
         blocExhibit(q),
         champ,
         fb,
-        el('div',{class:'nav-train'}, btnVerifier, el('div',{class:'nav-exam'}, btnPrec, btnSuiv)))));
+        el('div',{class:'nav-train'}, el('div',{class:'nav-exam'}, btnPrec, btnSuiv)))));
 }
 
 /* ============================================================
@@ -1227,19 +1225,20 @@ function rendre(){
   if(change && document.startViewTransition && !matchMedia('(prefers-reduced-motion: reduce)').matches) document.startViewTransition(maj); else maj();
 }
 
-/* Raccourcis clavier : ← → naviguer · A/B/C répondre · F marquer · Entrée vérifier · Échap ferme le zoom */
+/* Raccourcis clavier : ← → naviguer · A/B/C répondre · F marquer · Entrée ou → valider la réponse · Échap ferme le zoom */
 document.addEventListener('keydown', e => {
   if(e.ctrlKey || e.metaKey || e.altKey || document.querySelector('.zoom,.modale')) return;
   if(!['question','examQ'].includes(etat.vue)) return;
   const exam = etat.vue==='examQ', k = e.key.toLowerCase();
   if(k==='arrowleft' || k==='arrowright'){
     const d = k==='arrowleft' ? -1 : 1;
+    if(!exam && d===1 && etat.rep[etat.cur] && !etat.verif[etat.cur]){ const s = document.querySelector('.btn-suivant'); if(s) s.click(); return; }   // → valide d'abord la réponse
     if(exam) allerExam('examQ', etat.exam.pos + d); else { const v = voisin(etat.cur, d); if(v!==null) aller('question', v); }
   } else if(k.length===1 && 'abc'.includes(k)){
     const cb = document.querySelector(`.option input[value="${k.toUpperCase()}"]`); if(cb && !cb.disabled) cb.click();
   } else if(k==='f'){ const b = document.querySelector('.btn.drapeau'); if(b) b.click(); }
   else if(k==='enter' && !exam && !(e.target.closest && e.target.closest('button'))){
-    const b = [...document.querySelectorAll('.btn.primaire')].find(x => x.textContent==='Vérifier la réponse'); if(b && !b.disabled) b.click();
+    if(etat.rep[etat.cur] && !etat.verif[etat.cur]){ const s = document.querySelector('.btn-suivant'); if(s) s.click(); }
   }
 });
 document.getElementById('btnBanEntr').addEventListener('click', () => lancerEntrainement());
