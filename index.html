@@ -556,7 +556,7 @@ const THEMES = [...new Set(QUESTIONS.map(q => q.t))];
    ============================================================ */
 const CLE = 'fasp_qcm_everpure_v4';
 /* flags = questions marquées (entraînement) ; exam = examen en cours ou terminé (voir demarrerExamen) */
-const ETAT_INITIAL = () => ({ vue:'accueil', cur:0, rep:{}, verif:{}, flags:{}, exam:null, rechIds:[], filtre:'tous', sr:{}, rev:null, fl:null, examType:'complet', sess:[] });
+const ETAT_INITIAL = () => ({ vue:'accueil', cur:0, rep:{}, verif:{}, flags:{}, exam:null, rechIds:[], filtre:'tous', sr:{}, rev:null, fl:null, examType:'complet', sess:[], ordre:null, perm:{} });
 const JOURS=[0,0,1,3,7,21], MINI=20, PDF_AVEC_EXPLICATIONS=false;  // boîtes de Leitner (jours) · taille d'une série de révision · PDF
 const NB_EXAMEN = 60;               // questions tirées au hasard à chaque passage de l'examen
 const DUREE_EXAMEN = 120*60*1000;   // 120 minutes
@@ -579,6 +579,40 @@ function sauver(){ try{ localStorage.setItem(CLE, JSON.stringify(etat)); }catch(
    ============================================================ */
 const $app = document.getElementById('app');
 const N = QUESTIONS.length;
+
+/* ============================================================
+   MÉLANGE : ordre des questions (entraînement) et ordre des choix (partout), tirés à chaque passage
+   - la valeur stockée dans les réponses reste la lettre d'origine (A/B/C) : la correction ne change pas
+   - la lettre AFFICHÉE dépend de la position après mélange ; les explications sont ré-étiquetées en conséquence
+   ============================================================ */
+const LETTRES = 'ABCDEFGH';
+function melangeFY(a){ const r = [...a]; for(let k = r.length-1; k > 0; k--){ const j = Math.floor(Math.random()*(k+1)); [r[k], r[j]] = [r[j], r[k]]; } return r; }
+function permDe(store, cle, idx){            // ordre d'affichage des choix (clés d'origine), créé une fois puis conservé
+  const ids = Object.keys(QUESTIONS[idx].o);
+  if(!store) return ids;
+  if(!store[cle] || store[cle].length !== ids.length) store[cle] = melangeFY(ids);
+  return store[cle];
+}
+const pEntr = i => permDe(etat.perm || (etat.perm = {}), i, i);
+const pExam = i => permDe(etat.exam ? (etat.exam.perm || (etat.exam.perm = {})) : null, i, i);
+const optsAff = (q, perm) => perm.map((orig, k) => [LETTRES[k], orig, q.o[orig]]);   // [lettre affichée, clé d'origine, texte]
+const affLettre = (perm, orig) => LETTRES[perm.indexOf(orig)] || orig;
+function remapTxt(t, perm){                   // ré-étiquette les renvois « réponse B », « option C », « A et B sont… » dans les explications
+  const d = l => affLettre(perm, l);
+  return String(t)
+    .replace(/(réponses?|option)(\s+\*{0,2})([ABC])(?![A-Za-z0-9])/g, (m, a, b, c) => a + b + d(c))
+    .replace(/\(([ABC])\)/g, (m, c) => '(' + d(c) + ')')
+    .replace(/(Q\d+ = )([ABC])(?=\s)/g, (m, a, c) => a + d(c))
+    .replace(/(?<![A-Za-z0-9\/])([ABC]) et ([ABC])(?= sont)/g, (m, a, b) => d(a) + ' et ' + d(b))
+    .replace(/(?<![A-Za-z0-9\/])([ABC])(?= (?:est fausse|ne correspond|\(File System\)))/g, (m, c) => d(c));
+}
+const remapBloc = (b, perm) => [b[0], Array.isArray(b[1]) ? b[1].map(x => remapTxt(x, perm)) : remapTxt(b[1], perm)];
+const blocE = (q, perm) => q.e.map(b => bloc(remapBloc(b, perm)));
+
+/* Ordre des questions en entraînement : nouveau tirage à chaque passage (nouvelle série ou « Recommencer ») */
+function ordreEntr(){ if(!etat.ordre || etat.ordre.length !== N) etat.ordre = melangeFY(QUESTIONS.map((_, i) => i)); return etat.ordre; }
+function trier(l){ const rang = new Map(ordreEntr().map((v, k) => [v, k])); return [...l].sort((a, b) => rang.get(a) - rang.get(b)); }
+function nouveauTirage(){ etat.ordre = melangeFY(QUESTIONS.map((_, i) => i)); etat.perm = {}; }
 
 /* Création d'élément concise (le texte est toujours inséré via textContent : aucun risque d'injection) */
 function el(tag, attrs={}, ...enfants){
@@ -698,7 +732,7 @@ function liste(f = etat.filtre || 'tous'){
   return QUESTIONS.map((_,i)=>i).filter(i => f==='tous' || (f==='nonrep' && !etat.verif[i]) || (f==='erreurs' && etat.verif[i] && !estJuste(i))
     || (f==='rech' && (etat.rechIds||[]).includes(i)) || (f==='marquees' && etat.flags[i]) || (f==='dues' && etat.sr[i] && etat.sr[i].due<=Date.now()) || (th && QUESTIONS[i].t===th));
 }
-const ordreNav = () => { const l = liste(); return l.length ? l : QUESTIONS.map((_,i)=>i); };
+const ordreNav = () => { const l = liste(); return trier(l.length ? l : QUESTIONS.map((_,i)=>i)); };
 function voisin(i, d){ const l = ordreNav(), p = l.indexOf(i); if(p<0) return Math.max(0, Math.min(N-1, i+d)); return l[p+d] ?? null; }
 function filtresUI(){
   const rangee = (titre, defs) => el('div',{class:'chips'}, el('small',{text:titre}), defs.map(([f,lib]) => {
@@ -741,7 +775,7 @@ function statsExamThemes(){
   return THEMES.map(t => { const ids = ex.ordre.filter(i => QUESTIONS[i].t===t), ok = ids.filter(i => ex.rep[i]===QUESTIONS[i].a).length;
     return {t, n:ids.length, ok, pct: ids.length ? Math.round(ok/ids.length*100) : null}; }).filter(s => s.n);
 }
-const lancerEntrainement = () => { etat.filtre = 'tous'; const d = QUESTIONS.findIndex((_,i) => !etat.verif[i]); aller('question', d<0 ? 0 : d); };
+const lancerEntrainement = () => { etat.filtre = 'tous'; const f = nbVerifiees(); if(f===0 || f>=N) nouveauTirage(); const o = ordreNav(); aller('question', o.find(i => !etat.verif[i]) ?? o[0]); };
 const lancerExamen = () => { if(examActif()) allerExam('examQ', etat.exam.pos); else { etat.examType = 'complet'; vers('examIntro'); } };
 
 function panneauProgression(){
@@ -834,7 +868,7 @@ function vueSommaire(){
   const fait = nbVerifiees();
   const premiereNonFaite = QUESTIONS.findIndex((_,i)=>!etat.verif[i]);
   const reprise = fait>0 && fait<N;
-  const L = liste(), debut = L.find(i=>!etat.verif[i]) ?? L[0];
+  const L = liste();
 
   const grille = el('div',{class:'grille',role:'list'},
     QUESTIONS.map((q,i)=> !L.includes(i) ? null : el('button',{
@@ -858,7 +892,7 @@ function vueSommaire(){
     L.length ? null : el('p',{class:'sous-titre',style:'margin-top:16px',text:'Aucune question dans cette sélection.'}),
     grille,
     el('div',{class:'rangee'},
-      el('button',{class:'btn primaire',disabled:L.length?false:'',onclick:()=>aller('question', debut),
+      el('button',{class:'btn primaire',disabled:L.length?false:'',onclick:()=>{ if(fait===0 || fait>=N) nouveauTirage(); const o = trier(liste()); aller('question', o.find(i=>!etat.verif[i]) ?? o[0]); },
         text: fait===0 ? 'Commencer le QCM' : (fait===N ? 'Revoir les questions' : 'Reprendre où j’en étais')}),
       fait>0 ? el('button',{class:'btn',onclick:()=>aller('resume'),text:'Voir le résumé'}) : null,
       fait>0 ? el('button',{class:'btn',onclick:recommencer,text:'Recommencer'}) : null
@@ -870,13 +904,13 @@ function vueSommaire(){
 /* ============================================================
    VUE 2 : QUESTION
    ============================================================ */
-function blocFeedback(i){
+function blocFeedback(i, perm = pEntr(i)){
   const q = QUESTIONS[i], ok = estJuste(i);
   return el('div',{class:`fb-corps ${ok?'ok':'ko'}`},
     el('p',{class:'fb-titre',text: ok ? '✅ Correcte !' : '❌ Incorrecte'}),
-    ok ? null : el('p',{},'La bonne réponse est ', el('strong',{}, `${q.a}. `, inline(q.o[q.a])), '.'),
+    ok ? null : el('p',{},'La bonne réponse est ', el('strong',{}, `${affLettre(perm, q.a)}. `, inline(q.o[q.a])), '.'),
     el('p',{class:'expl-label',text:'Explication'}),
-    q.e.map(bloc)
+    blocE(q, perm)
   );
 }
 
@@ -892,7 +926,7 @@ function barreFiltres(){
     return el('button',{class:'onglet-q'+(actif?' actif':''),'aria-pressed':String(actif),onclick:()=>{
       if(!n && f!=='tous') return info('Aucune question dans cette sélection pour le moment.');
       const cible = (actif && !['tous','nonrep','erreurs'].includes(f)) ? 'tous' : f; etat.filtre = cible;
-      const l = liste(cible); sauver(); aller('question', l.includes(etat.cur) ? etat.cur : (l.find(i => !etat.verif[i]) ?? l[0] ?? 0)); }},
+      const l = trier(liste(cible)); sauver(); aller('question', l.includes(etat.cur) ? etat.cur : (l.find(i => !etat.verif[i]) ?? l[0] ?? 0)); }},
       lib, el('span',{class:'cpt',text:String(n)})); };
   const extra = ['tous','nonrep','erreurs'].includes(courant) ? null
     : onglet(courant, courant==='marquees' ? 'Marquées' : courant==='dues' ? 'À revoir' : courant==='rech' ? 'Résultats' : courant.replace(/^th:/,''));
@@ -901,12 +935,12 @@ function barreFiltres(){
     el('button',{class:'reset-q',title:'Effacer les réponses d’entraînement',onclick:recommencer},'↺ Réinitialiser'));
 }
 function vueQuestion(){
-  const i = etat.cur, q = QUESTIONS[i], verifiee = !!etat.verif[i];
+  const i = etat.cur, q = QUESTIONS[i], verifiee = !!etat.verif[i], perm = pEntr(i);
   const choix = etat.rep[i] || null;
 
   /* Options : cartes cliquables, une seule sélection possible */
   const champ = el('fieldset',{class:'options'}, el('legend',{class:'sr',style:'position:absolute;left:-9999px',text:`Options de la question ${q.n}`}));
-  Object.entries(q.o).forEach(([lettre,texte])=>{
+  optsAff(q, perm).forEach(([aff,lettre,texte])=>{
     let cls = 'option';
     if(verifiee){
       cls += ' verrou';
@@ -914,7 +948,7 @@ function vueQuestion(){
       else if(lettre===choix) cls += ' mauvaise';
     } else if(lettre===choix) cls += ' choisie';
 
-    const cb = el('input',{type:'checkbox',name:`q${q.n}`,value:lettre,checked:lettre===choix?'':false,disabled:verifiee?'':false});
+    const cb = el('input',{type:'checkbox',name:`q${q.n}`,value:lettre,'data-l':aff,checked:lettre===choix?'':false,disabled:verifiee?'':false});
     cb.checked = lettre===choix;
     cb.addEventListener('change',()=>{
       etat.rep[i] = cb.checked ? lettre : undefined;       // décocher = effacer la sélection
@@ -923,7 +957,7 @@ function vueQuestion(){
     });
     const badge = verifiee && lettre===q.a ? el('span',{class:'badge',text:'Bonne réponse'})
                 : verifiee && lettre===choix ? el('span',{class:'badge',text:'Votre réponse'}) : null;
-    champ.append(el('label',{class:cls}, cb, el('span',{class:'lettre',text:lettre}), el('span',{class:'texte-opt'}, inline(texte)), badge));
+    champ.append(el('label',{class:cls}, cb, el('span',{class:'lettre',text:aff}), el('span',{class:'texte-opt'}, inline(texte)), badge));
   });
 
   const fb = el('div',{class:'feedback','aria-live':'polite'}, el('div',{}, verifiee ? blocFeedback(i) : ''));
@@ -980,7 +1014,7 @@ function vueResume(){
   const j = nbJustes(), v = nbVerifiees(), f = v-j, nr = N-v;
   const pct = Math.round(j/N*100);
 
-  const revue = QUESTIONS.map((q,i)=> carteRevue({q, choix:etat.rep[i], repondu:!!etat.verif[i], flag:!!etat.flags[i],
+  const revue = QUESTIONS.map((q,i)=> carteRevue({q, perm:pEntr(i), choix:etat.rep[i], repondu:!!etat.verif[i], flag:!!etat.flags[i],
     label:`Question ${q.n}`, msgNr:'Question non vérifiée.', onRevoir:()=>aller('question',i)}));
 
   return el('section',{class:'carte'},
@@ -1005,28 +1039,28 @@ function vueResume(){
 /* ============================================================
    MARQUAGE : bouton « 🚩 Marquer pour révision » (entraînement et examen)
    ============================================================ */
-function boutonFlag(flags, idx){
+function boutonFlag(flags, idx, onChange){
   const b = el('button',{class:'btn drapeau',title:'Marquer cette question pour y revenir plus tard'});
   const maj = () => { const on = !!flags[idx]; b.classList.toggle('actif',on); b.setAttribute('aria-pressed',String(on)); b.textContent = on ? '🚩 Marquée' : '🚩 Marquer pour révision'; };
-  b.addEventListener('click',()=>{ if(flags[idx]) delete flags[idx]; else flags[idx] = true; sauver(); maj(); });
+  b.addEventListener('click',()=>{ if(flags[idx]) delete flags[idx]; else flags[idx] = true; sauver(); maj(); if(onChange) onChange(); });
   maj(); return b;
 }
 
 /* Carte de correction (utilisée par le résumé d'entraînement et le résultat d'examen) */
-function carteRevue({q, choix, repondu, flag, label, msgNr, onRevoir}){
+function carteRevue({q, choix, repondu, flag, label, msgNr, onRevoir, perm = Object.keys(q.o)}){
   const s = !repondu ? 'nr' : (choix===q.a ? 'ok' : 'ko');
-  const opts = el('div',{class:'options'}, Object.entries(q.o).map(([l,tx])=>{
+  const opts = el('div',{class:'options'}, optsAff(q, perm).map(([aff,l,tx])=>{
     let cls = 'option verrou', badge = null;
     if(l===q.a){ cls += ' bonne'; badge = el('span',{class:'badge',text:'Bonne réponse'}); }
     else if(repondu && l===choix){ cls += ' mauvaise'; badge = el('span',{class:'badge',text:'Votre réponse'}); }
-    return el('div',{class:cls}, el('span',{class:'lettre',text:l}), el('span',{class:'texte-opt'}, inline(tx)), badge);
+    return el('div',{class:cls}, el('span',{class:'lettre',text:aff}), el('span',{class:'texte-opt'}, inline(tx)), badge);
   }));
   return el('article',{class:`revue-item ${s}`},
     el('h3',{text:`${s==='ok'?'✅':s==='ko'?'❌':'⚪'} ${flag?'🚩 ':''}${label} – ${q.q}`}),
     blocExhibit(q),
     opts,
     s==='nr' ? el('p',{style:'color:var(--gris);margin:0 0 8px',text:msgNr}) : null,
-    el('details',{}, el('summary',{text:'Explication'}), q.e.map(bloc)),
+    el('details',{}, el('summary',{text:'Explication'}), blocE(q, perm)),
     onRevoir ? el('div',{style:'margin-top:8px'}, el('button',{class:'lien',onclick:onRevoir,text:'Revoir cette question'})) : null
   );
 }
@@ -1045,7 +1079,7 @@ function demarrerExamen(){
   const ordre = QUESTIONS.map((_,i)=>i);
   for(let k=ordre.length-1;k>0;k--){ const r = Math.floor(Math.random()*(k+1)); [ordre[k],ordre[r]] = [ordre[r],ordre[k]]; }  ordre.length = Math.min(NB_EXAMEN, N);   // tirage aléatoire différent à chaque passage
   const now = Date.now();
-  etat.exam = { ordre, pos:0, rep:{}, flags:{}, debut:now, fin:now+DUREE_EXAMEN, termine:null, auto:false };
+  etat.exam = { ordre, perm:{}, pos:0, rep:{}, flags:{}, debut:now, fin:now+DUREE_EXAMEN, termine:null, auto:false };
   allerExam('examQ', 0);
 }
 
@@ -1061,6 +1095,12 @@ function tick(){
   if(!examActif()) return;
   if(etat.exam.fin - Date.now() <= 0){ terminerExamen(true); return; }
   if(etat.vue==='examQ' || etat.vue==='examRevue') majEntete();
+}
+
+async function confirmerFinExamen(){
+  const nbNon = NX() - nbRepExam();
+  const avert = nbNon ? `Il reste ${nbNon} question${nbNon>1?'s':''} sans réponse.\n` : '';
+  if(await confirmer(avert + 'Terminer l’examen et afficher le résultat ? Cette action est définitive.', 'Terminer')) terminerExamen(false);
 }
 
 function vueExamIntro(){
@@ -1083,29 +1123,36 @@ function vueExamIntro(){
 function vueExamQ(){
   const ex = etat.exam, pos = ex.pos, idx = ex.ordre[pos], q = QUESTIONS[idx], choix = ex.rep[idx] || null, dernier = pos===NX()-1;
   const champ = el('fieldset',{class:'options'}, el('legend',{style:'position:absolute;left:-9999px',text:`Options de la question ${pos+1}`}));
-  Object.entries(q.o).forEach(([l,tx])=>{
-    const cb = el('input',{type:'checkbox',name:`e${idx}`,value:l});
+  const perm = pExam(idx);
+  optsAff(q, perm).forEach(([aff,l,tx])=>{
+    const cb = el('input',{type:'checkbox',name:`e${idx}`,value:l,'data-l':aff});
     cb.checked = l===choix;
     cb.addEventListener('change',()=>{ if(cb.checked) ex.rep[idx] = l; else delete ex.rep[idx]; sauver(); rendre(); });
-    champ.append(el('label',{class:'option'+(l===choix?' choisie':'')}, cb, el('span',{class:'lettre',text:l}), el('span',{class:'texte-opt'}, inline(tx))));
+    champ.append(el('label',{class:'option'+(l===choix?' choisie':'')}, cb, el('span',{class:'lettre',text:aff}), el('span',{class:'texte-opt'}, inline(tx))));
   });
   const nm = Object.keys(ex.flags).length;
+  /* « Revue de l'examen » : visible seulement si au moins une question est marquée (mis à jour en direct) */
+  const scoreEl = el('span',{class:'q-score',text:`${nbRepExam()} / ${NX()} répondues${nm ? ` · 🚩 ${nm}` : ''}`});
+  const blocRevue = el('div',{class:'revue-sep',hidden: nm ? false : ''},
+    el('button',{class:'btn btn-revue',onclick:()=>allerExam('examRevue'),text:'📋 Revue de l’examen'}));
+  const majMarques = () => { const n = Object.keys(ex.flags).length; blocRevue.hidden = !n; scoreEl.textContent = `${nbRepExam()} / ${NX()} répondues${n ? ` · 🚩 ${n}` : ''}`; };
   return el('div',{class:'vue-q'},
     el('div',{class:'q-progres'}, el('div',{class:'mini-barre'}, el('div',{style:`width:${(pos+1)/NX()*100}%`})), el('span',{text:`${pos+1} / ${NX()}`})),
     el('section',{class:'carte carte-q'},
       el('div',{class:'q-barre'}, el('span',{class:'q-ico','aria-hidden':'true',text:'?'}),
         el('span',{class:'q-titre',text:`Question ${pos+1}`}),
-        el('span',{class:'q-score',text:`${nbRepExam()} / ${NX()} répondues${nm ? ` · 🚩 ${nm}` : ''}`})),
+        scoreEl),
       el('div',{class:'q-corps'},
-        el('div',{class:'q-entete'}, el('span',{class:'chip-theme chip-exam',text:'Examen blanc'}), boutonFlag(ex.flags, idx)),
+        el('div',{class:'q-entete'}, el('span',{class:'chip-theme chip-exam',text:'Examen blanc'}), boutonFlag(ex.flags, idx, majMarques)),
         el('h2',{class:'enonce'}, inline(q.q)),
         blocExhibit(q),
         champ,
         el('div',{class:'nav-exam'},
           el('button',{class:'btn',disabled:pos===0?'':false,'aria-label':'Question précédente',title:'Précédente (←)',onclick:()=>allerExam('examQ',pos-1),text:'← Précédente'}),
-          el('button',{class:'btn primaire',disabled:dernier?'':false,'aria-label':'Question suivante',title:'Suivante (→)',onclick:()=>allerExam('examQ',pos+1),text:'Suivante →'})),
-        el('div',{class:'revue-sep'},
-          el('button',{class:'btn btn-revue',onclick:()=>allerExam('examRevue'),text:'📋 Revue de l’examen'})))));
+          dernier
+            ? el('button',{class:'btn primaire','aria-label':'Terminer l’examen',title:'Terminer l’examen',onclick:confirmerFinExamen,text:'Terminer'})
+            : el('button',{class:'btn primaire','aria-label':'Question suivante',title:'Suivante (→)',onclick:()=>allerExam('examQ',pos+1),text:'Suivante →'})),
+        blocRevue)));
 }
 
 function vueExamRevue(){
@@ -1129,17 +1176,14 @@ function vueExamRevue(){
       el('button',{class:'btn',disabled:pMarq<0?'':false,onclick:()=>allerExam('examQ',pMarq),text:`Prochaine marquée (${nbMarq})`})),
     el('div',{class:'nav-q'},
       el('button',{class:'btn',onclick:()=>allerExam('examQ',ex.pos),text:'← Retourner à l’examen'}),
-      el('button',{class:'btn primaire',text:'Terminer l’examen',onclick:async()=>{
-        const avert = nbNon ? `Il reste ${nbNon} question${nbNon>1?'s':''} sans réponse.\n` : '';
-        if(await confirmer(avert + 'Terminer l’examen et afficher le résultat ? Cette action est définitive.', 'Terminer')) terminerExamen(false);
-      }})));
+      el('button',{class:'btn primaire',text:'Terminer l’examen',onclick:confirmerFinExamen})));
 }
 
 function vueExamRes(){
   const ex = etat.exam, j = scoreExam(), rep = nbRepExam(), f = rep-j, nr = NX()-rep;
   const pct = Math.round(j/NX()*100), reussi = pct >= SEUIL_REUSSITE, nbMarq = Object.keys(ex.flags).length;
   const s = Math.round((ex.termine-ex.debut)/1000), duree = `${Math.floor(s/60)} min ${pad(s%60)} s`;
-  const revue = ex.ordre.map((idx,pos)=> carteRevue({q:QUESTIONS[idx], choix:ex.rep[idx], repondu:!!ex.rep[idx], flag:!!ex.flags[idx], label:`Question ${pos+1}`, msgNr:'Question non répondue.'}));
+  const revue = ex.ordre.map((idx,pos)=> carteRevue({q:QUESTIONS[idx], perm:pExam(idx), choix:ex.rep[idx], repondu:!!ex.rep[idx], flag:!!ex.flags[idx], label:`Question ${pos+1}`, msgNr:'Question non répondue.'}));
   return el('section',{class:'carte'},
     el('div',{class:'bilan'},
       el('h1',{text:'Résultat de l’examen'}),
@@ -1417,7 +1461,7 @@ document.addEventListener('keydown', e => {
     if(!exam && d===1 && etat.rep[etat.cur] && !etat.verif[etat.cur]){ const s = document.querySelector('.btn-suivant'); if(s) s.click(); return; }   // → valide d'abord la réponse
     if(exam) allerExam('examQ', etat.exam.pos + d); else { const v = voisin(etat.cur, d); if(v!==null) aller('question', v); }
   } else if(k.length===1 && 'abc'.includes(k)){
-    const cb = document.querySelector(`.option input[value="${k.toUpperCase()}"]`); if(cb && !cb.disabled) cb.click();
+    const cb = document.querySelector(`.option input[data-l="${k.toUpperCase()}"]`); if(cb && !cb.disabled) cb.click();
   } else if(k==='f'){ const b = document.querySelector('.btn.drapeau'); if(b) b.click(); }
   else if(k==='enter' && !exam && !(e.target.closest && e.target.closest('button'))){
     if(etat.rep[etat.cur] && !etat.verif[etat.cur]){ const s = document.querySelector('.btn-suivant'); if(s) s.click(); }
@@ -1444,7 +1488,7 @@ document.getElementById('btnLogo').addEventListener('click', async () => {
 const NT = () => Math.min(NB_EXAMEN, N);
 const NX = () => etat.exam && etat.exam.ordre ? etat.exam.ordre.length : N;
 const tous = () => QUESTIONS.map((_,i)=>i);
-const melange = a => [...a].sort(() => Math.random()-.5);
+const melange = a => melangeFY(a);
 function srMaj(i, ok, horsSession){            // juste : boîte +1 · faux : retour en boîte 1 (revient aussitôt)
   const s = etat.sr[i] || (etat.sr[i] = {box:0, ok:0, ko:0});
   if(!horsSession){ (etat.sess || (etat.sess = [])).push([i, +!!ok]); }   // journal de la session (panneau latéral)
@@ -1465,7 +1509,7 @@ const finSerie = (titre, detail) => el('section',{class:'carte bilan'}, el('h1',
 function vueRev(){
   const v = etat.rev;
   if(!v || v.pos>=v.ordre.length) return finSerie('Série terminée 🎉', v ? `${v.ok} correcte(s) · ${v.ko} erreur(s) : les erreurs reviendront plus vite.` : '');
-  const i = v.ordre[v.pos], q = QUESTIONS[i], c = v.ch[v.pos], ok = c===q.a;
+  const i = v.ordre[v.pos], q = QUESTIONS[i], c = v.ch[v.pos], ok = c===q.a, perm = permDe(v.perm || (v.perm = {}), v.pos, i);
   const choisir = l => { if(c) return; v.ch[v.pos] = l; const bon = l===q.a; srMaj(i,bon); bon ? v.ok++ : v.ko++;
     if(!bon && !v.rq[i]){ v.rq[i] = 1; v.ordre.push(i); } sauver(); rendre(); };
   return el('section',{class:'carte'},
@@ -1473,9 +1517,9 @@ function vueRev(){
     el('div',{class:'q-prog'}, el('span',{class:'num-q',text:`Révision ${v.pos+1} / ${v.ordre.length}`}), el('div',{class:'q-session'}, el('span',{class:'ok',text:`✓ ${v.ok}`}), el('span',{class:'ko',text:`✗ ${v.ko}`}))),
     el('div',{class:'mini-barre'}, el('div',{style:`width:${(v.pos+1)/v.ordre.length*100}%`})),
     el('h2',{class:'enonce'}, inline(q.q)), blocExhibit(q),
-    el('div',{class:'options'}, Object.entries(q.o).map(([l,tx]) => el('button',{class:'option'+(c?' verrou':'')+(c&&l===q.a?' bonne':(c&&l===c?' mauvaise':'')),onclick:()=>choisir(l)},
-      el('span',{class:'lettre',text:l}), el('span',{class:'texte-opt'}, inline(tx))))),
-    c ? el('div',{class:'fb-corps '+(ok?'ok':'ko')}, el('p',{class:'fb-titre',text: ok ? '✅ Correcte !' : '❌ Incorrecte : elle reviendra dans cette série'}), q.e.map(bloc)) : null,
+    el('div',{class:'options'}, optsAff(q, perm).map(([aff,l,tx]) => el('button',{class:'option'+(c?' verrou':'')+(c&&l===q.a?' bonne':(c&&l===c?' mauvaise':'')),onclick:()=>choisir(l)},
+      el('span',{class:'lettre',text:aff}), el('span',{class:'texte-opt'}, inline(tx))))),
+    c ? el('div',{class:'fb-corps '+(ok?'ok':'ko')}, el('p',{class:'fb-titre',text: ok ? '✅ Correcte !' : '❌ Incorrecte : elle reviendra dans cette série'}), blocE(q, perm)) : null,
     c ? el('div',{class:'rangee',style:'margin-top:18px'}, el('button',{class:'btn primaire',onclick:()=>{v.pos++;sauver();rendre();window.scrollTo({top:0});},text: v.pos+1>=v.ordre.length ? 'Terminer' : 'Suivante →'})) : null);
 }
 function demarrerFlash(){
@@ -1485,14 +1529,14 @@ function demarrerFlash(){
 function vueFlash(){
   const f = etat.fl;
   if(!f || f.pos>=f.ordre.length) return finSerie('Flashcards terminées 🎉', f ? `${f.ordre.length} cartes parcourues.` : '');
-  const i = f.ordre[f.pos], q = QUESTIONS[i], suite = ok => { srMaj(i,ok); f.pos++; f.r = false; sauver(); rendre(); window.scrollTo({top:0}); };
+  const i = f.ordre[f.pos], q = QUESTIONS[i], perm = permDe(f.perm || (f.perm = {}), f.pos, i), suite = ok => { srMaj(i,ok); f.pos++; f.r = false; sauver(); rendre(); window.scrollTo({top:0}); };
   return el('section',{class:'carte'},
     el('div',{class:'q-entete'}, el('span',{class:'chip-theme',text:q.t}), el('button',{class:'lien',onclick:()=>vers('accueil'),text:'Quitter'})),
     el('div',{class:'q-prog'}, el('span',{class:'num-q',text:`Carte ${f.pos+1} / ${f.ordre.length}`})),
     el('div',{class:'mini-barre'}, el('div',{style:`width:${(f.pos+1)/f.ordre.length*100}%`})),
     el('h2',{class:'enonce'}, inline(q.q)), blocExhibit(q),
-    el('div',{class:'options'}, Object.entries(q.o).map(([l,tx]) => el('div',{class:'option verrou'+(f.r&&l===q.a?' bonne':'')}, el('span',{class:'lettre',text:l}), el('span',{class:'texte-opt'}, inline(tx))))),
-    f.r ? el('div',{class:'fb-corps ok'}, el('p',{class:'fb-titre',text:'Bonne réponse : '+q.a}), q.e.map(bloc)) : null,
+    el('div',{class:'options'}, optsAff(q, perm).map(([aff,l,tx]) => el('div',{class:'option verrou'+(f.r&&l===q.a?' bonne':'')}, el('span',{class:'lettre',text:aff}), el('span',{class:'texte-opt'}, inline(tx))))),
+    f.r ? el('div',{class:'fb-corps ok'}, el('p',{class:'fb-titre',text:'Bonne réponse : '+affLettre(perm, q.a)}), blocE(q, perm)) : null,
     el('div',{class:'rangee',style:'margin-top:18px'}, f.r
       ? [el('button',{class:'btn primaire',onclick:()=>suite(true),text:'✅ Je savais'}), el('button',{class:'btn',onclick:()=>suite(false),text:'🔁 À revoir'})]
       : el('button',{class:'btn primaire',onclick:()=>{f.r=true;sauver();rendre();},text:'Retourner la carte'})));
@@ -1600,7 +1644,7 @@ async function exporterPDF(k){
     const ok = ids.filter(i => rep[i]===QUESTIONS[i].a), rep_n = ids.filter(i => rep[i]).length, pct = Math.round(ok.length/total*100);
     const arevoir = ids.filter(i => rep[i]!==QUESTIONS[i].a);
     const th = THEMES.map(t => { const a = ids.filter(i => QUESTIONS[i].t===t); return [t, a.filter(i => rep[i]===QUESTIONS[i].a).length, a.length]; }).filter(x => x[2]);
-    const pages = []; let p, y;
+    const pages = []; let p, y; const pf = i => exam ? pExam(i) : pEntr(i);
     const nouvelle = () => { p = Page(); pages.push(p);
       p.rect(0,0,595.28,72,'#1C1C1C').rect(0,72,595.28,4,'#FE5000').image(40,14,logo.w/logo.h*44,44)
        .texte(40+logo.w/logo.h*44+14,36,'Everpure Certified FlashArray Storage Professional (FASP)','HB',13,'#FFFFFF')
@@ -1627,7 +1671,7 @@ async function exporterPDF(k){
     if(!arevoir.length){ y += 16; p.texte(40,y,'Aucune : bravo !','H',10.5,'#1A8F4C'); }
     arevoir.forEach(i => {
       const q = QUESTIONS[i], non = !rep[i];
-      const l1 = coupe('H', nu(q.q), 9.5, 515), l2 = coupe('H', `Votre réponse : ${non ? 'aucune' : rep[i] + ' – ' + nu(q.o[rep[i]])}`, 9, 515), l3 = coupe('H', `Bonne réponse : ${q.a} – ${nu(q.o[q.a])}`, 9, 515);
+      const l1 = coupe('H', nu(q.q), 9.5, 515), l2 = coupe('H', `Votre réponse : ${non ? 'aucune' : affLettre(pf(i), rep[i]) + ' – ' + nu(q.o[rep[i]])}`, 9, 515), l3 = coupe('H', `Bonne réponse : ${affLettre(pf(i), q.a)} – ${nu(q.o[q.a])}`, 9, 515);
       const ex_ = PDF_AVEC_EXPLICATIONS ? coupe('H', nu(q.e.map(b => b[0]==='ul' ? b[1].join(' ; ') : b[1]).join(' ')), 8.5, 515) : [];
       place(24 + 12*(l1.length + l2.length + l3.length + ex_.length) + 8);
       y += 20; p.texte(40,y,`Q${q.n}`,'HB',10,'#FE5000').texte(66,y,q.t + (non ? ' · non répondue' : ''),'HB',9,'#777777');
